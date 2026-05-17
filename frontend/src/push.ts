@@ -63,3 +63,30 @@ export async function unsubscribePush(): Promise<void> {
   try { await api.unregisterPush(json) } catch { /* server may be unreachable; still drop local */ }
   await sub.unsubscribe()
 }
+
+// Drop the backend's user→subscription mapping without touching the browser's
+// SW subscription. Used on logout so the next user logging in on the same
+// browser inherits a clean slate, while the browser sub persists across
+// sessions (avoids re-prompting for permission and keeps the bell "on").
+export async function releasePushBinding(): Promise<void> {
+  if (!pushSupported()) return
+  const reg = await navigator.serviceWorker.getRegistration()
+  if (!reg) return
+  const sub = await reg.pushManager.getSubscription()
+  if (!sub) return
+  try { await api.unregisterPush(sub.toJSON()) } catch { /* best effort */ }
+}
+
+// On login, if the browser already has a push subscription and notifications
+// are still granted, rebind it to the now-authenticated user. Silent no-op
+// otherwise. Pairs with releasePushBinding() to preserve subscriptions across
+// sessions on the same browser.
+export async function rebindPushIfSubscribed(): Promise<void> {
+  if (!pushSupported()) return
+  if (Notification.permission !== 'granted') return
+  const reg = await navigator.serviceWorker.getRegistration()
+  if (!reg) return
+  const sub = await reg.pushManager.getSubscription()
+  if (!sub) return
+  try { await api.registerPush(sub.toJSON()) } catch { /* best effort */ }
+}
