@@ -149,4 +149,4 @@ docker compose logs backend | grep "Password:"
 
 ## License
 
-Personal project — no license declared. Self-host for yourself and people you trust.
+[MIT](LICENSE) © 2026 sonlm
