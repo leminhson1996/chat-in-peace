@@ -114,6 +114,25 @@ The first user is `admin`, created on first run with a random password printed t
 
 Room rename and delete are normally restricted to the room's creator; admin override is a separate path.
 
+### Lost the admin password?
+
+The password is only printed on the **very first** backend boot, when no `user:admin` exists in Redis. On any subsequent `docker-compose up` it stays silent — the `redis_data` volume persists the admin account across restarts.
+
+Check whether the admin already exists:
+
+```bash
+docker compose exec redis redis-cli EXISTS user:admin   # 1 = already created
+```
+
+If it does and you've lost the password, delete the admin user and restart the backend — bootstrap will recreate it and print a fresh password:
+
+```bash
+docker compose exec redis redis-cli DEL user:admin
+docker compose exec redis redis-cli SREM users admin
+docker compose restart backend
+docker compose logs backend | grep "Password:"
+```
+
 ---
 
 ## License
