@@ -78,6 +78,18 @@ Push payloads contain only the sender's name — never message contents — beca
 
 Pubkey gating: a user has no pubkey in Redis until they log in for the first time. Without a pubkey they cannot be added to encrypted rooms — the UI surfaces this in the "Add Member" modal as a pending-users panel.
 
+### Cross-device history recovery
+
+The first time a fresh keypair is generated for a user, the client wraps the PKCS#8 private key with an AES-GCM key derived from their **login password** (PBKDF2-SHA-256, 600 000 iterations, salt = username) and uploads the opaque blob to `user:{username}:wrapped_privkey`. The server can read neither the password nor the unwrapped key.
+
+When the PWA is reinstalled on the same device — or installed fresh on a new device — login fetches that blob, derives the same wrapping key from the password, unwraps the private key, and stores it in IndexedDB. Because the recovered private key matches the original, every wrapped room key on the server still unwraps correctly and DM ciphertext still decrypts → **all message history is restored automatically.**
+
+Caveats:
+
+- **Login password = recovery passphrase.** Anyone with the password can recover the history; conversely, *losing* the password loses the history. Admin password resets invalidate the wrapped blob.
+- **The feature is opportunistic and forward-looking.** Users whose IndexedDB held a non-extractable key from before this feature shipped are not migrated — their existing key can't be exported. They get recovery on the next fresh-storage login (and any history encrypted before that login is permanently lost).
+- **Strength floor is the password.** A weak password makes an offline brute-force against the wrapped blob feasible for anyone who can read Redis. PBKDF2 600k iters raises the cost but doesn't eliminate it.
+
 ---
 
 ## Project layout

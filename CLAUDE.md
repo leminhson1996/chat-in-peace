@@ -84,7 +84,8 @@ internal/push/push.go       Web Push (VAPID) sender; no-op when env vars unset
 ## Frontend Architecture (`frontend/src/`)
 
 ```
-crypto/index.ts                          all Web Crypto API logic — never import crypto primitives elsewhere
+crypto/index.ts                          Web Crypto API logic + `initRecoverableKeyPair` orchestration; never import crypto primitives elsewhere
+crypto/recovery.ts                       PBKDF2 wrap/unwrap of the user's private key for cross-device recovery
 push.ts                                  Web Push subscribe/unsubscribe helpers (talks to PushManager + backend)
 sw.ts                                    custom service worker (vite-plugin-pwa injectManifest); handles push + notificationclick
 store/authStore.ts                       JWT, username, role (persisted to localStorage via zustand/middleware)
@@ -110,6 +111,7 @@ components/ChatArea/RoomSettingsModal.tsx owner-only rename + delete
 3. **Room encryption**: room creator generates a random AES-256-GCM room key; for each member, wraps the room key using an ephemeral ECDH + AES-GCM and stores the blob at `room:{id}:key:{username}`
 4. **Adding a member**: caller fetches their own wrapped room key, unwraps it client-side, re-wraps with the new member's public key, POSTs the wrapped blob with the member's username — server never sees the unwrapped key
 5. Decrypted messages live only in `chatStore` in memory; only ciphertext is ever persisted
+6. **Cross-device recovery** (`crypto/recovery.ts`): on the first login that generates a fresh extractable keypair, the client wraps the PKCS#8 private key with an AES-GCM key derived from the user's login password (PBKDF2-SHA-256, 600k iters, salt `cip-recovery:{username}`) and uploads the opaque blob via `POST /api/users/me/wrapped-privkey`. On a later fresh install with empty IndexedDB, `initRecoverableKeyPair` fetches the blob and unwraps with the password — the original private key is restored, so all prior DMs and room messages decrypt again. The transient password sits in `authStore.password` (in-memory only, excluded from `persist` via `partialize`). The server can read neither the password nor the private key. Existing users with a non-extractable key already in IndexedDB are **not** migrated — their key can't be exported, so they only get recovery on the next fresh-storage login.
 
 ### Pubkey gating (important)
 
@@ -198,6 +200,7 @@ In Docker, `REDIS_URL` defaults to `redis://redis:6379` via `docker-compose.yml`
 users                           SET    — all usernames
 user:{username}                 HASH   — { password_hash, role, created_at, icon?, color? }
 user:{username}:pubkey          STRING — base64 SPKI ECDH public key (set on first login)
+user:{username}:wrapped_privkey STRING — JSON {iv, ct}: PKCS#8 private key encrypted with AES-GCM under a key derived from the user's password via PBKDF2-SHA-256 (salt = "cip-recovery:"+username, 600k iters). Enables cross-device history recovery; opaque to the server.
 
 # Rooms
 rooms                           SET    — all room IDs
@@ -226,6 +229,8 @@ GET    /api/auth/me                     → { username, role, has_pubkey }
 
 POST   /api/users/me/pubkey             upload own public key
 GET    /api/users/{username}/pubkey     fetch any user's public key
+GET    /api/users/me/wrapped-privkey    fetch own password-wrapped private key (404 if not set)
+POST   /api/users/me/wrapped-privkey    upload own password-wrapped private key
 GET    /api/users                       list { username, has_pubkey, icon, color } — used by DM list + AddMemberModal + avatars
 
 GET    /api/rooms                       list rooms caller is a member of (with created_by + members)
