@@ -1,0 +1,4 @@
+# TODO
+
+- [ ] **Let users reset their own password.** Currently only admins can change a password via `PATCH /api/admin/users/{username}/password`, which invalidates the user's `wrapped_privkey` recovery blob. A self-serve flow needs to: prompt for the current password + new password, re-wrap the private key with the new password client-side, and atomically update both `password_hash` and `wrapped_privkey` server-side so recovery survives the change.
+- [ ] **Paginate message history.** `GET /api/rooms/{id}/history` and `GET /api/dm/{username}/history` currently return the entire ZSET. Add cursor-based pagination (e.g. `?before={ts}&limit=50`), update the frontend to load older messages on scroll-up, and make sure unread counts + scroll-to-bottom behaviour still work with partial history loaded.
