@@ -75,7 +75,9 @@ internal/push/push.go       Web Push (VAPID) sender; no-op when env vars unset
 
 **Adding a new HTTP route:** register in `main.go` using Go 1.22 pattern syntax (`METHOD /path/{param}`). Use `requireAuth` or `requireAdmin` middleware wrappers.
 
-**Web Push:** opt-in via `VAPID_PUBLIC`/`VAPID_PRIVATE`/`VAPID_SUBJECT` env vars. When set, `hub.go` sends a generic notification (sender name only — no plaintext, since server has only ciphertext) to every offline recipient of a room/DM message. Subscriptions live in a Redis SET at `user:{username}:push`. Dead 404/410 subscriptions are pruned automatically on next send.
+**Web Push:** opt-in via `VAPID_PUBLIC`/`VAPID_PRIVATE`/`VAPID_SUBJECT` env vars. When set, `hub.go` sends a generic notification (sender name only — no plaintext, since server has only ciphertext) to every offline recipient of a room/DM message. Subscriptions live in a Redis SET at `user:{username}:push`. Dead subscriptions (HTTP `403`/`404`/`410` from the push service) are pruned automatically on next send; non-success responses are logged with the body + endpoint so failures are diagnosable.
+
+`VAPID_SUBJECT` must start with `mailto:` or `https:` — `config.go` fatals at boot otherwise, because push services (Apple in particular) reject malformed `sub` URIs with HTTP 403 `BadJwtToken`. The `push.New` constructor then strips the `mailto:` prefix before handing the value to `SherClockHolmes/webpush-go`, which has a long-standing bug that double-prepends `mailto:` if it sees one already in place — FCM/Mozilla accept the malformed URI silently, but Apple rejects every notification. Don't remove the strip.
 
 ---
 
@@ -135,20 +137,31 @@ Sidebar reads `unread` directly; channel rows get a count pill on the right, DM 
 
 `ChatPage.tsx` populates the sidebar DM list from `GET /api/users` filtered to `has_pubkey === true && username !== self`, unioned with peers surfaced via shared rooms. **Don't** derive the DM list from room members alone — `GET /api/rooms` is membership-filtered, so a user with no shared rooms would see an empty DM list. Users without a pubkey (never logged in) are intentionally hidden because you can't encrypt to them anyway — same gating as `AddMemberModal`.
 
-The same fetch also seeds `chatStore.userIcons` (see below), so the DM list, message avatars, and sidebar user-area all stay in sync.
+The same fetch also seeds `chatStore.userIcons` and `chatStore.userColors` (see below), so the DM list, message avatars, and sidebar user-area all stay in sync.
 
-### Avatars and icons
+### Avatars (icon + color)
 
-User avatars are rendered via `components/UserAvatar.tsx`. It reads `chatStore.userIcons[username]` and, if present, looks the id up in the whitelist in `src/icons.tsx` (curated lucide icons) and renders the icon centred on a colored circle. If no icon is set or the id is unknown, it falls back to the first letter of the username — that fallback is intentional and must not be removed.
+User avatars are rendered via `components/UserAvatar.tsx`. It reads two whitelisted fields from the store:
 
-**Icon flow:**
+- `chatStore.userIcons[username]` → looked up in `src/icons.tsx` (curated lucide icons) and rendered centred on the circle.
+- `chatStore.userColors[username]` → looked up in `src/colors.ts` and applied as inline `backgroundColor` over the default `bg-discord-accent` Tailwind class.
 
-1. Admin opens AdminPage → clicks an avatar in the user table → picker modal lists icons from `ICONS` in `src/icons.tsx`.
-2. Picker calls `PATCH /api/admin/users/{username}/icon` with `{ icon: "<id>" | "" }`. Empty string clears the field (server uses `HDEL`).
-3. On success, AdminPage updates both its local user list and `chatStore.setUserIcon(username, icon)` so the change shows up immediately in the sidebar and ongoing chat messages without a refetch.
-4. On other clients, the new icon is picked up the next time `GET /api/users` runs (currently on ChatPage mount/room-change).
+If either field is missing or its id is unknown, the avatar falls back: no icon → first letter of the username; no color → `discord-accent`. Both fallbacks are intentional and must not be removed.
 
-**Adding a new icon to the picker:** import the lucide component in `src/icons.tsx`, add an `{ id, label, Component }` entry. **Never rename an existing `id`** — it's persisted in Redis and orphaning a selection means users silently lose their icon.
+**Admin flow:**
+
+1. AdminPage user table shows a clickable avatar per row → opens the customise-avatar modal.
+2. Modal has two sections (Icon, Color) and a live preview. Each tile sends a PATCH:
+   - `PATCH /api/admin/users/{username}/icon` body `{ icon }`
+   - `PATCH /api/admin/users/{username}/color` body `{ color }`
+3. Empty string clears the corresponding field (server uses `HDEL`).
+4. On success, AdminPage updates its local user list AND calls `setUserIcon` / `setUserColor` so the change shows up immediately across the app without a refetch. The modal also updates its own `iconTarget` so the live preview and selection ring stay in sync.
+5. Other clients pick up changes on their next `GET /api/users` (currently on ChatPage mount/room-change).
+
+**Adding a new icon or color to the picker:**
+- Icons: import the lucide component in `src/icons.tsx`, append an `{ id, label, Component }` entry.
+- Colors: append an `{ id, label, hex }` entry in `src/colors.ts`.
+- **Never rename an existing `id`.** Ids are persisted in Redis; renaming orphans every user's selection silently.
 
 ### Adding a new page
 
@@ -183,7 +196,7 @@ In Docker, `REDIS_URL` defaults to `redis://redis:6379` via `docker-compose.yml`
 ```
 # Users
 users                           SET    — all usernames
-user:{username}                 HASH   — { password_hash, role, created_at, icon? }
+user:{username}                 HASH   — { password_hash, role, created_at, icon?, color? }
 user:{username}:pubkey          STRING — base64 SPKI ECDH public key (set on first login)
 
 # Rooms
@@ -213,7 +226,7 @@ GET    /api/auth/me                     → { username, role, has_pubkey }
 
 POST   /api/users/me/pubkey             upload own public key
 GET    /api/users/{username}/pubkey     fetch any user's public key
-GET    /api/users                       list { username, has_pubkey, icon } — used by DM list + AddMemberModal + avatars
+GET    /api/users                       list { username, has_pubkey, icon, color } — used by DM list + AddMemberModal + avatars
 
 GET    /api/rooms                       list rooms caller is a member of (with created_by + members)
 POST   /api/rooms                       create room (creator uploads own wrapped key)
@@ -231,7 +244,8 @@ DELETE /api/users/me/push               unregister a device subscription (same b
 
 # Admin only
 GET/POST/DELETE/PATCH /api/admin/users[...]
-PATCH               /api/admin/users/{username}/icon     body { icon } — "" clears it
+PATCH               /api/admin/users/{username}/icon     body { icon }  — "" clears it
+PATCH               /api/admin/users/{username}/color    body { color } — "" clears it
 DELETE              /api/admin/rooms/{id}              (admin override)
 POST                /api/admin/rooms/{id}/members      (admin override; still needs a wrapped key)
 DELETE              /api/admin/rooms/{id}/members/{u}

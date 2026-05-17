@@ -342,6 +342,7 @@ func main() {
 	mux.HandleFunc("DELETE /api/admin/users/{username}", requireAdmin(cfg.JWTSecret, adminH.DeleteUser))
 	mux.HandleFunc("PATCH /api/admin/users/{username}/password", requireAdmin(cfg.JWTSecret, adminH.ResetPassword))
 	mux.HandleFunc("PATCH /api/admin/users/{username}/icon", requireAdmin(cfg.JWTSecret, adminH.SetIcon))
+	mux.HandleFunc("PATCH /api/admin/users/{username}/color", requireAdmin(cfg.JWTSecret, adminH.SetColor))
 	mux.HandleFunc("DELETE /api/admin/rooms/{id}", requireAdmin(cfg.JWTSecret, adminH.DeleteRoom))
 	mux.HandleFunc("POST /api/admin/rooms/{id}/members", requireAdmin(cfg.JWTSecret, adminH.AddMember))
 	mux.HandleFunc("DELETE /api/admin/rooms/{id}/members/{username}", requireAdmin(cfg.JWTSecret, adminH.RemoveMember))

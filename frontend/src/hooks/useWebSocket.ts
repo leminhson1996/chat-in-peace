@@ -57,7 +57,10 @@ export function useWebSocket(crypto: CryptoReady) {
     }
 
     ws.onclose = () => {
-      if (!token) return // deliberate logout
+      // Read token live — capturing it in the closure means a logout-driven
+      // close still sees the old (truthy) token and incorrectly reconnects,
+      // which keeps the user "online" on the hub and suppresses pushes.
+      if (!useAuthStore.getState().token) return
       const delay = Math.min(1000 * 2 ** retryCount.current, 30000)
       retryCount.current++
       reconnectTimer.current = setTimeout(connect, delay)
@@ -67,7 +70,14 @@ export function useWebSocket(crypto: CryptoReady) {
   useEffect(() => {
     connect()
     return () => {
-      wsRef.current?.close()
+      const ws = wsRef.current
+      if (ws) {
+        // Detach the close handler before closing so a deliberate teardown
+        // (logout / token rotation) cannot trigger a reconnect attempt.
+        ws.onclose = null
+        ws.close()
+      }
+      wsRef.current = null
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
     }
   }, [connect])

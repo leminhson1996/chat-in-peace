@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, Trash2, KeyRound, UserPlus, Clock, ImagePlus, X } from 'lucide-react'
+import { ArrowLeft, Trash2, KeyRound, UserPlus, Clock, ImagePlus, X, Check } from 'lucide-react'
 import { api } from '../api/client'
 import UserAvatar from '../components/UserAvatar'
 import { ICONS } from '../icons'
+import { COLORS } from '../colors'
 import { useChatStore } from '../store/chatStore'
 
 type Tab = 'users' | 'settings'
 
-interface User { username: string; role: string; icon: string }
+interface User { username: string; role: string; icon: string; color: string }
 
 const TTL_OPTIONS = [
   { label: 'Never', value: '0' },
@@ -31,23 +32,40 @@ export default function AdminPage() {
   const [success, setSuccess] = useState('')
   const setUserIcons = useChatStore(s => s.setUserIcons)
   const setUserIcon = useChatStore(s => s.setUserIcon)
+  const setUserColors = useChatStore(s => s.setUserColors)
+  const setUserColor = useChatStore(s => s.setUserColor)
 
-  // Mirror loaded user icons into chatStore so other surfaces (sidebar, messages)
-  // pick them up when the admin lands on this page first.
+  // Mirror loaded user icon/color into chatStore so other surfaces (sidebar,
+  // messages) pick them up when the admin lands on this page first.
   useEffect(() => {
     if (users.length === 0) return
-    const map: Record<string, string> = {}
-    users.forEach(u => { if (u.icon) map[u.username] = u.icon })
-    setUserIcons(map)
-  }, [users, setUserIcons])
+    const iconMap: Record<string, string> = {}
+    const colorMap: Record<string, string> = {}
+    users.forEach(u => {
+      if (u.icon) iconMap[u.username] = u.icon
+      if (u.color) colorMap[u.username] = u.color
+    })
+    setUserIcons(iconMap)
+    setUserColors(colorMap)
+  }, [users, setUserIcons, setUserColors])
 
   async function chooseIcon(username: string, icon: string) {
     try {
       await api.adminSetIcon(username, icon)
       setUsers(us => us.map(u => u.username === username ? { ...u, icon } : u))
       setUserIcon(username, icon)
-      setIconTarget(null)
+      setIconTarget(t => t && t.username === username ? { ...t, icon } : t)
       notify(icon ? 'Icon updated.' : 'Icon cleared.')
+    } catch (e: any) { setError(e.message) }
+  }
+
+  async function chooseColor(username: string, color: string) {
+    try {
+      await api.adminSetColor(username, color)
+      setUsers(us => us.map(u => u.username === username ? { ...u, color } : u))
+      setUserColor(username, color)
+      setIconTarget(t => t && t.username === username ? { ...t, color } : t)
+      notify(color ? 'Color updated.' : 'Color cleared.')
     } catch (e: any) { setError(e.message) }
   }
 
@@ -178,9 +196,14 @@ export default function AdminPage() {
                         <button
                           onClick={() => setIconTarget(u)}
                           className="group relative"
-                          title="Change icon"
+                          title="Customize avatar"
                         >
-                          <UserAvatar username={u.username} iconOverride={u.icon || null} size={32} />
+                          <UserAvatar
+                            username={u.username}
+                            iconOverride={u.icon || null}
+                            colorOverride={u.color || null}
+                            size={32}
+                          />
                           <span className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                             <ImagePlus size={14} className="text-white" />
                           </span>
@@ -214,47 +237,94 @@ export default function AdminPage() {
               </table>
             </div>
 
-            {/* Icon picker modal */}
+            {/* Avatar picker modal — icon + color */}
             {iconTarget && (
               <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
                 <div className="bg-discord-sidebar rounded-lg w-full max-w-lg shadow-2xl max-h-[90vh] flex flex-col">
                   <div className="flex items-center justify-between px-5 py-4 border-b border-black/20">
-                    <h2 className="text-white font-semibold">
-                      Choose icon for <span className="text-discord-accent">{iconTarget.username}</span>
-                    </h2>
-                    <button onClick={() => setIconTarget(null)} className="text-discord-muted hover:text-white" aria-label="Close">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <UserAvatar
+                        username={iconTarget.username}
+                        iconOverride={iconTarget.icon || null}
+                        colorOverride={iconTarget.color || null}
+                        size={36}
+                      />
+                      <h2 className="text-white font-semibold truncate">
+                        Customize avatar — <span className="text-discord-accent">{iconTarget.username}</span>
+                      </h2>
+                    </div>
+                    <button onClick={() => setIconTarget(null)} className="text-discord-muted hover:text-white shrink-0" aria-label="Close">
                       <X size={18} />
                     </button>
                   </div>
-                  <div className="overflow-y-auto p-4">
-                    <button
-                      onClick={() => chooseIcon(iconTarget.username, '')}
-                      className={`w-full mb-3 px-3 py-2 text-sm rounded transition-colors ${
-                        !iconTarget.icon
-                          ? 'bg-discord-accent text-white'
-                          : 'bg-discord-hover text-discord-text hover:bg-discord-active'
-                      }`}
-                    >
-                      No icon (use first letter of username)
-                    </button>
-                    <div className="grid grid-cols-6 sm:grid-cols-8 gap-2">
-                      {ICONS.map(({ id, label, Component }) => {
-                        const selected = iconTarget.icon === id
-                        return (
-                          <button
-                            key={id}
-                            onClick={() => chooseIcon(iconTarget.username, id)}
-                            title={label}
-                            className={`aspect-square rounded flex items-center justify-center transition-colors ${
-                              selected
-                                ? 'bg-discord-accent text-white ring-2 ring-white/30'
-                                : 'bg-discord-hover text-discord-text hover:bg-discord-active hover:text-white'
-                            }`}
-                          >
-                            <Component size={20} />
-                          </button>
-                        )
-                      })}
+                  <div className="overflow-y-auto p-4 space-y-5">
+                    {/* Icon */}
+                    <div>
+                      <h3 className="text-xs font-semibold text-discord-muted uppercase tracking-wide mb-2">Icon</h3>
+                      <button
+                        onClick={() => chooseIcon(iconTarget.username, '')}
+                        className={`w-full mb-2 px-3 py-2 text-sm rounded transition-colors ${
+                          !iconTarget.icon
+                            ? 'bg-discord-accent text-white'
+                            : 'bg-discord-hover text-discord-text hover:bg-discord-active'
+                        }`}
+                      >
+                        No icon (use first letter of username)
+                      </button>
+                      <div className="grid grid-cols-6 sm:grid-cols-8 gap-2">
+                        {ICONS.map(({ id, label, Component }) => {
+                          const selected = iconTarget.icon === id
+                          return (
+                            <button
+                              key={id}
+                              onClick={() => chooseIcon(iconTarget.username, id)}
+                              title={label}
+                              className={`aspect-square rounded flex items-center justify-center transition-colors ${
+                                selected
+                                  ? 'bg-discord-accent text-white ring-2 ring-white/30'
+                                  : 'bg-discord-hover text-discord-text hover:bg-discord-active hover:text-white'
+                              }`}
+                            >
+                              <Component size={20} />
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Color */}
+                    <div>
+                      <h3 className="text-xs font-semibold text-discord-muted uppercase tracking-wide mb-2">Color</h3>
+                      <button
+                        onClick={() => chooseColor(iconTarget.username, '')}
+                        className={`w-full mb-2 px-3 py-2 text-sm rounded transition-colors ${
+                          !iconTarget.color
+                            ? 'bg-discord-accent text-white'
+                            : 'bg-discord-hover text-discord-text hover:bg-discord-active'
+                        }`}
+                      >
+                        Default
+                      </button>
+                      <div className="grid grid-cols-8 sm:grid-cols-10 gap-2">
+                        {COLORS.map(({ id, label, hex }) => {
+                          const selected = iconTarget.color === id
+                          return (
+                            <button
+                              key={id}
+                              onClick={() => chooseColor(iconTarget.username, id)}
+                              title={label}
+                              className={`aspect-square rounded-full flex items-center justify-center transition-transform hover:scale-110 ${
+                                selected ? 'ring-2 ring-white ring-offset-2 ring-offset-discord-sidebar' : ''
+                              }`}
+                              style={{ backgroundColor: hex }}
+                              aria-label={label}
+                              aria-pressed={selected}
+                            >
+                              {selected && <Check size={14} className="text-white drop-shadow" />}
+                            </button>
+                          )
+                        })}
+                      </div>
                     </div>
                   </div>
                 </div>

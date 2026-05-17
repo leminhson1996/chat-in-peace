@@ -40,11 +40,12 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Role     string `json:"role"`
 		Icon     string `json:"icon"`
+		Color    string `json:"color"`
 	}
 	result := make([]userInfo, 0, len(names))
 	for _, name := range names {
 		u, _ := h.redis.GetUser(r.Context(), name)
-		result = append(result, userInfo{Username: name, Role: u["role"], Icon: u["icon"]})
+		result = append(result, userInfo{Username: name, Role: u["role"], Icon: u["icon"], Color: u["color"]})
 	}
 	writeJSON(w, 200, result)
 }
@@ -86,6 +87,27 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(204)
+}
+
+func (h *Handler) SetColor(w http.ResponseWriter, r *http.Request) {
+	username := r.PathValue("username")
+	exists, _ := h.redis.UserExists(r.Context(), username)
+	if !exists {
+		writeJSON(w, 404, map[string]string{"error": "user not found"})
+		return
+	}
+	var body struct {
+		Color string `json:"color"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid body"})
+		return
+	}
+	if err := h.redis.SetUserColor(r.Context(), username, body.Color); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"username": username, "color": body.Color})
 }
 
 func (h *Handler) SetIcon(w http.ResponseWriter, r *http.Request) {

@@ -24,7 +24,7 @@ export const api = {
   login: (username: string, password: string) =>
     request<{ token: string; username: string; role: string }>('POST', '/auth/login', { username, password }),
 
-  me: () => request<{ username: string; role: string; has_pubkey: string; icon: string }>('GET', '/auth/me'),
+  me: () => request<{ username: string; role: string; has_pubkey: string; icon: string; color: string }>('GET', '/auth/me'),
 
   uploadPubkey: (pubkey: string) => request<void>('POST', '/users/me/pubkey', { pubkey }),
   getPubkey: (username: string) => request<{ pubkey: string }>('GET', `/users/${username}/pubkey`),
@@ -40,7 +40,7 @@ export const api = {
   addRoomMember: (id: string, username: string, wrapped_key: string) =>
     request<void>('POST', `/rooms/${id}/members`, { username, wrapped_key }),
 
-  listUsers: () => request<Array<{ username: string; has_pubkey: boolean; icon: string }>>('GET', '/users'),
+  listUsers: () => request<Array<{ username: string; has_pubkey: boolean; icon: string; color: string }>>('GET', '/users'),
 
   getDMHistory: (username: string) => request<Message[]>('GET', `/dm/${username}/history`),
 
@@ -50,9 +50,11 @@ export const api = {
   unregisterPush: (sub: PushSubscriptionJSON) => request<void>('DELETE', '/users/me/push', sub),
 
   // Admin
-  adminListUsers: () => request<Array<{ username: string; role: string; icon: string }>>('GET', '/admin/users'),
+  adminListUsers: () => request<Array<{ username: string; role: string; icon: string; color: string }>>('GET', '/admin/users'),
   adminSetIcon: (username: string, icon: string) =>
     request<{ username: string; icon: string }>('PATCH', `/admin/users/${username}/icon`, { icon }),
+  adminSetColor: (username: string, color: string) =>
+    request<{ username: string; color: string }>('PATCH', `/admin/users/${username}/color`, { color }),
   adminCreateUser: (username: string, password: string, role: string) =>
     request<{ username: string }>('POST', '/admin/users', { username, password, role }),
   adminDeleteUser: (username: string) => request<void>('DELETE', `/admin/users/${username}`),

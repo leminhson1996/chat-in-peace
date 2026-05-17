@@ -192,6 +192,7 @@ func (h *Hub) handle(cm clientMsg) {
 		go h.pushRoom(in.RoomID, cm.client.username)
 
 	case "send_dm":
+		log.Printf("dm: %s -> %s", cm.client.username, in.To)
 		msg := rdb.Message{
 			ID:     uuid.NewString(),
 			Sender: cm.client.username,
@@ -251,11 +252,14 @@ func (h *Hub) sendTo(username string, out OutgoingMsg) {
 // surface the sender's name.
 func (h *Hub) pushDM(sender, to string) {
 	if !h.push.Enabled() {
+		log.Printf("push dm %s->%s: skipped (push disabled)", sender, to)
 		return
 	}
 	if h.isOnline(to) {
+		log.Printf("push dm %s->%s: skipped (%s online)", sender, to, to)
 		return
 	}
+	log.Printf("push dm %s->%s: sending", sender, to)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	h.push.Send(ctx, to, push.Payload{

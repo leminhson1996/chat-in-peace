@@ -11,7 +11,7 @@ import ChatArea from '../components/ChatArea/ChatArea'
 import NewRoomModal from '../components/ChatArea/NewRoomModal'
 
 export default function ChatPage() {
-  const { rooms, setRooms, active, setActive, setUserIcons } = useChatStore()
+  const { rooms, setRooms, active, setActive, setUserIcons, setUserColors } = useChatStore()
   const username = useAuthStore(s => s.username)!
   const crypto = useCrypto()
   const { sendRoom, sendDM, joinRoom } = useWebSocket(crypto)
@@ -34,8 +34,13 @@ export default function ChatPage() {
         const users = await api.listUsers()
         if (!cancelled) {
           const iconMap: Record<string, string> = {}
-          users.forEach(u => { if (u.icon) iconMap[u.username] = u.icon })
+          const colorMap: Record<string, string> = {}
+          users.forEach(u => {
+            if (u.icon) iconMap[u.username] = u.icon
+            if (u.color) colorMap[u.username] = u.color
+          })
           setUserIcons(iconMap)
+          setUserColors(colorMap)
         }
         users.forEach(u => {
           if (u.username !== username && u.has_pubkey) seen.add(u.username)

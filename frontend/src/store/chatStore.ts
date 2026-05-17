@@ -23,6 +23,7 @@ interface ChatState {
   messages: Record<string, DecryptedMessage[]> // key = roomId or "dm:username"
   unread: Record<string, number>
   userIcons: Record<string, string> // username → lucide icon id (whitelist in src/icons.tsx)
+  userColors: Record<string, string> // username → color id (whitelist in src/colors.ts)
   active: ConversationKey | null
   setRooms: (rooms: Room[]) => void
   setActive: (conv: ConversationKey | null) => void
@@ -32,6 +33,8 @@ interface ChatState {
   setMessages: (key: string, msgs: DecryptedMessage[]) => void
   setUserIcons: (icons: Record<string, string>) => void
   setUserIcon: (username: string, icon: string) => void
+  setUserColors: (colors: Record<string, string>) => void
+  setUserColor: (username: string, color: string) => void
 }
 
 export function convKey(conv: ConversationKey) {
@@ -43,6 +46,7 @@ export const useChatStore = create<ChatState>((set) => ({
   messages: {},
   unread: {},
   userIcons: {},
+  userColors: {},
   active: null,
   setRooms: (rooms) => set({ rooms }),
   setActive: (active) =>
@@ -70,5 +74,14 @@ export const useChatStore = create<ChatState>((set) => ({
         return { userIcons: rest }
       }
       return { userIcons: { ...s.userIcons, [username]: icon } }
+    }),
+  setUserColors: (colors) => set({ userColors: colors }),
+  setUserColor: (username, color) =>
+    set((s) => {
+      if (!color) {
+        const { [username]: _, ...rest } = s.userColors
+        return { userColors: rest }
+      }
+      return { userColors: { ...s.userColors, [username]: color } }
     }),
 }))

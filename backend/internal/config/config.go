@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -32,6 +33,11 @@ func Load() *Config {
 	}
 	if c.VAPIDPublic == "" || c.VAPIDPrivate == "" {
 		log.Printf("VAPID_PUBLIC / VAPID_PRIVATE not set — web push notifications disabled")
+	} else if !strings.HasPrefix(c.VAPIDSubject, "mailto:") && !strings.HasPrefix(c.VAPIDSubject, "https:") {
+		// Push services (FCM in particular) reject VAPID JWTs whose `sub` claim
+		// is not a mailto: or https: URI with HTTP 403. Fail fast instead of
+		// shipping every notification into a black hole.
+		log.Fatalf("VAPID_SUBJECT must start with \"mailto:\" or \"https:\" (got %q)", c.VAPIDSubject)
 	}
 	return c
 }
