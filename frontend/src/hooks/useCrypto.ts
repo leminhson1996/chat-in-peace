@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import {
-  getOrGenerateKeyPair,
+  initRecoverableKeyPair,
   exportPublicKey,
   getSharedKey,
   getCachedRoomKey,
@@ -33,17 +33,18 @@ export function useCrypto(): CryptoReady {
     if (!username) return
     let cancelled = false
     async function init() {
-      const kp = await getOrGenerateKeyPair()
+      // Pull password from the store (in-memory only; cleared on logout) so
+      // we can wrap/unwrap the recovery blob during init.
+      const password = useAuthStore.getState().password
+      const kp = await initRecoverableKeyPair(username!, password)
       if (cancelled) return
       privateKeyRef.current = kp.privateKey
-      // Upload public key if not already on server
+      // Upload the public key on every init — idempotent on the server and
+      // makes sure it stays in sync after a recovery on a fresh device.
       try {
-        await api.me() // check server
         const pubB64 = await exportPublicKey(kp.publicKey)
         await api.uploadPubkey(pubB64)
-      } catch {
-        // Already uploaded or network error — proceed
-      }
+      } catch { /* network error — proceed */ }
       if (!cancelled) setReady(true)
     }
     init()
@@ -52,7 +53,8 @@ export function useCrypto(): CryptoReady {
 
   async function getMyPrivate(): Promise<CryptoKey> {
     if (privateKeyRef.current) return privateKeyRef.current
-    const kp = await getOrGenerateKeyPair()
+    const password = useAuthStore.getState().password
+    const kp = await initRecoverableKeyPair(username!, password)
     privateKeyRef.current = kp.privateKey
     return kp.privateKey
   }
@@ -106,7 +108,8 @@ export function useCrypto(): CryptoReady {
       result[member] = await wrapRoomKey(roomKey, theirPubB64)
     }
     // Also wrap for self
-    const kp = await getOrGenerateKeyPair()
+    const password = useAuthStore.getState().password
+    const kp = await initRecoverableKeyPair(username!, password)
     const myPubB64 = await expPub(kp.publicKey)
     result[username!] = await wrapRoomKey(roomKey, myPubB64)
     return result

@@ -2,6 +2,8 @@
 // Private keys are stored in IndexedDB and never leave the browser.
 
 import { openDB } from 'idb'
+import { api } from '../api/client'
+import { wrapPrivateKey, unwrapPrivateKey, downgradeToNonExtractable } from './recovery'
 
 const DB_NAME = 'cip-keys'
 const DB_STORE = 'keys'
@@ -16,6 +18,66 @@ async function getKeyDB() {
   })
 }
 
+// Init order:
+//   1. If a key already lives in IndexedDB on this device, use it. Done.
+//   2. Else, if a recovery blob exists on the server AND we have the password,
+//      unwrap it. This restores history after a PWA reinstall / new device.
+//   3. Else, generate a fresh extractable keypair, wrap+upload the recovery
+//      blob (if password is available), then downgrade to non-extractable for
+//      local storage. This is the first-login path.
+//
+// Returns the keypair plus a flag describing how it was obtained so the caller
+// can decide whether to upload the public key etc.
+export async function initRecoverableKeyPair(
+  username: string,
+  password: string | null,
+): Promise<{ publicKey: CryptoKey; privateKey: CryptoKey; source: 'local' | 'recovered' | 'generated' }> {
+  const db = await getKeyDB()
+  const storedPriv = await db.get(DB_STORE, PRIVATE_KEY_ID)
+  if (storedPriv) {
+    const storedPub = await db.get(DB_STORE, PUBLIC_KEY_ID)
+    return { privateKey: storedPriv, publicKey: storedPub, source: 'local' }
+  }
+
+  // No local key — try recovery first.
+  if (password) {
+    try {
+      const { wrapped_privkey } = await api.getWrappedPrivkey()
+      const { privateKey, publicKey } = await unwrapPrivateKey(wrapped_privkey, password, username)
+      await db.put(DB_STORE, privateKey, PRIVATE_KEY_ID)
+      await db.put(DB_STORE, publicKey, PUBLIC_KEY_ID)
+      return { privateKey, publicKey, source: 'recovered' }
+    } catch {
+      // 404 (no blob yet) or wrong password — fall through to generate.
+    }
+  }
+
+  // Fresh keypair. Extractable only long enough to wrap-and-upload, then
+  // downgraded to non-extractable for IDB storage so the in-memory invariant
+  // matches the rest of the codebase.
+  const fresh = await crypto.subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    ['deriveKey', 'deriveBits'],
+  )
+  if (password) {
+    try {
+      const blob = await wrapPrivateKey(fresh.privateKey, password, username)
+      await api.uploadWrappedPrivkey(blob)
+    } catch {
+      // Network failure: still proceed with a usable local key. Recovery
+      // upload will retry on the next successful login.
+    }
+  }
+  const privateKey = await downgradeToNonExtractable(fresh.privateKey)
+  await db.put(DB_STORE, privateKey, PRIVATE_KEY_ID)
+  await db.put(DB_STORE, fresh.publicKey, PUBLIC_KEY_ID)
+  return { privateKey, publicKey: fresh.publicKey, source: 'generated' }
+}
+
+// Legacy entry point — preserved for any caller that doesn't have a password
+// in hand (e.g. service worker contexts). Returns a non-recoverable keypair if
+// it has to generate one.
 export async function getOrGenerateKeyPair(): Promise<{ publicKey: CryptoKey; privateKey: CryptoKey }> {
   const db = await getKeyDB()
   const stored = await db.get(DB_STORE, PRIVATE_KEY_ID)
@@ -25,7 +87,7 @@ export async function getOrGenerateKeyPair(): Promise<{ publicKey: CryptoKey; pr
   }
   const kp = await crypto.subtle.generateKey(
     { name: 'ECDH', namedCurve: 'P-256' },
-    false, // private key non-extractable
+    false,
     ['deriveKey', 'deriveBits'],
   )
   await db.put(DB_STORE, kp.privateKey, PRIVATE_KEY_ID)

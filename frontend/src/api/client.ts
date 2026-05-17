@@ -29,6 +29,11 @@ export const api = {
   uploadPubkey: (pubkey: string) => request<void>('POST', '/users/me/pubkey', { pubkey }),
   getPubkey: (username: string) => request<{ pubkey: string }>('GET', `/users/${username}/pubkey`),
 
+  // Password-wrapped private key for cross-device history recovery.
+  getWrappedPrivkey: () => request<{ wrapped_privkey: string }>('GET', '/users/me/wrapped-privkey'),
+  uploadWrappedPrivkey: (wrapped_privkey: string) =>
+    request<void>('POST', '/users/me/wrapped-privkey', { wrapped_privkey }),
+
   getRooms: () => request<Array<{ id: string; name: string; created_by: string; members: string[] }>>('GET', '/rooms'),
   createRoom: (name: string, wrapped_key: string) =>
     request<{ id: string; name: string }>('POST', '/rooms', { name, wrapped_key }),

@@ -100,6 +100,33 @@ func main() {
 		writeJSON(w, 200, map[string]string{"pubkey": pubkey})
 	}))
 
+	// ── Wrapped private key (cross-device history recovery) ────────────
+	// Blob is opaque to the server: client's PKCS#8 private key encrypted
+	// with an AES-GCM key derived from the user's password via PBKDF2.
+	mux.HandleFunc("GET /api/users/me/wrapped-privkey", requireAuth(cfg.JWTSecret, func(w http.ResponseWriter, r *http.Request, claims *auth.Claims) {
+		blob, err := redis.GetWrappedPrivkey(r.Context(), claims.Username)
+		if err != nil || blob == "" {
+			writeJSON(w, 404, map[string]string{"error": "not set"})
+			return
+		}
+		writeJSON(w, 200, map[string]string{"wrapped_privkey": blob})
+	}))
+
+	mux.HandleFunc("POST /api/users/me/wrapped-privkey", requireAuth(cfg.JWTSecret, func(w http.ResponseWriter, r *http.Request, claims *auth.Claims) {
+		var body struct {
+			WrappedPrivkey string `json:"wrapped_privkey"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.WrappedPrivkey == "" {
+			writeJSON(w, 400, map[string]string{"error": "wrapped_privkey required"})
+			return
+		}
+		if err := redis.SetWrappedPrivkey(r.Context(), claims.Username, body.WrappedPrivkey); err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(204)
+	}))
+
 	// ── Web Push ────────────────────────────────────────────────────────
 	// Public key is published so the frontend can call pushManager.subscribe.
 	mux.HandleFunc("GET /api/push/vapid-public", func(w http.ResponseWriter, r *http.Request) {

@@ -89,6 +89,18 @@ func (c *Client) GetUserPubkey(ctx context.Context, username string) (string, er
 	return c.rdb.Get(ctx, "user:"+username+":pubkey").Result()
 }
 
+// Wrapped private key for cross-device recovery. The blob is opaque to the
+// server — it's the client's ECDH private key (PKCS#8) encrypted with an
+// AES-GCM key derived from the user's login password via PBKDF2. The server
+// never sees the password or the unwrapped key.
+func (c *Client) SetWrappedPrivkey(ctx context.Context, username, blob string) error {
+	return c.rdb.Set(ctx, "user:"+username+":wrapped_privkey", blob, 0).Err()
+}
+
+func (c *Client) GetWrappedPrivkey(ctx context.Context, username string) (string, error) {
+	return c.rdb.Get(ctx, "user:"+username+":wrapped_privkey").Result()
+}
+
 // SetUserIcon writes the chosen icon identifier into the user hash. An empty
 // string clears it — empty means "fall back to the first letter of the
 // username".

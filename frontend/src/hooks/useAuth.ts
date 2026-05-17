@@ -11,7 +11,9 @@ export function useAuth() {
 
   const login = useCallback(async (username: string, password: string) => {
     const data = await api.login(username, password)
-    setAuth(data.token, data.username, data.role)
+    // Password is held in memory only (see authStore.partialize) so useCrypto
+    // can wrap/unwrap the recovery blob during init.
+    setAuth(data.token, data.username, data.role, password)
     // Rebind any persistent browser subscription to this user so the bell
     // stays on across sessions (especially important for Safari PWAs where
     // re-subscribing can re-trigger the permission prompt).
