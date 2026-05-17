@@ -65,6 +65,19 @@ export default function ChatArea({ conv, onSendRoom, onSendDM, onJoinRoom, onBac
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [msgs.length])
 
+  // Re-pin to the latest message whenever the visual viewport resizes — i.e.
+  // when the mobile keyboard opens or closes. Without this the message list
+  // keeps its old scrollTop and the user lands on blank space above the input.
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const onResize = () => {
+      bottomRef.current?.scrollIntoView({ block: 'end' })
+    }
+    vv.addEventListener('resize', onResize)
+    return () => vv.removeEventListener('resize', onResize)
+  }, [])
+
   async function send() {
     const text = input.trim()
     if (!text || sending) return
@@ -178,13 +191,18 @@ export default function ChatArea({ conv, onSendRoom, onSendDM, onJoinRoom, onBac
       </div>
 
       {/* Input */}
-      <div className="px-4 pb-4 shrink-0">
-        <div className="flex items-end gap-2 bg-[#383a40] rounded-lg px-4 py-2.5">
+      <div className="px-3 sm:px-4 pb-2 sm:pb-4 pt-1 shrink-0">
+        <div className="flex items-end gap-2 bg-[#383a40] rounded-lg px-3 sm:px-4 py-2 sm:py-2.5">
           <textarea
             ref={textareaRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={onKeyDown}
+            onFocus={() => {
+              // Keyboard is about to open on mobile — scroll latest message
+              // into view once the viewport has finished resizing.
+              setTimeout(() => bottomRef.current?.scrollIntoView({ block: 'end' }), 250)
+            }}
             placeholder={placeholder}
             rows={1}
             className="msg-input flex-1 min-h-[24px] max-h-32 py-0.5 bg-transparent placeholder:text-discord-muted"
@@ -194,11 +212,12 @@ export default function ChatArea({ conv, onSendRoom, onSendDM, onJoinRoom, onBac
             onClick={send}
             disabled={!input.trim() || sending}
             className="text-discord-muted hover:text-discord-accent disabled:opacity-30 transition-colors pb-0.5"
+            aria-label="Send"
           >
             <Send size={18} />
           </button>
         </div>
-        <p className="text-discord-muted text-[11px] mt-1.5 px-1">
+        <p className="hidden sm:block text-discord-muted text-[11px] mt-1.5 px-1">
           Enter to send · Shift+Enter for new line
         </p>
       </div>

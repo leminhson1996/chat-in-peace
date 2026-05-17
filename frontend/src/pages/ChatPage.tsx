@@ -53,6 +53,24 @@ export default function ChatPage() {
     return () => { cancelled = true }
   }, [rooms, username])
 
+  // Track the visual viewport so the layout shrinks when the iOS/Android soft
+  // keyboard opens — `100dvh` alone doesn't react to the keyboard on iOS Safari,
+  // which causes the page to scroll up and hide the chat header + history.
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const set = () => {
+      document.documentElement.style.setProperty('--app-height', `${vv.height}px`)
+    }
+    set()
+    vv.addEventListener('resize', set)
+    vv.addEventListener('scroll', set)
+    return () => {
+      vv.removeEventListener('resize', set)
+      vv.removeEventListener('scroll', set)
+    }
+  }, [])
+
   if (!crypto.ready) {
     return (
       <div className="min-h-screen bg-discord-bg flex items-center justify-center flex-col gap-3">
@@ -63,9 +81,10 @@ export default function ChatPage() {
   }
 
   return (
-    // `100dvh` keeps the input above the mobile keyboard; `h-screen` is the
-    // fallback for browsers that don't understand the dvh unit.
-    <div className="flex h-screen overflow-hidden" style={{ height: '100dvh' }}>
+    // `--app-height` is driven by `window.visualViewport` (see effect above) so
+    // the layout shrinks when the mobile keyboard opens. `100dvh` is the
+    // fallback for browsers without visualViewport.
+    <div className="flex overflow-hidden" style={{ height: 'var(--app-height, 100dvh)' }}>
       {/* On <md, single-pane layout: Sidebar fills the screen when no conversation is open. */}
       <div className={clsx('md:flex', active ? 'hidden md:flex' : 'flex')}>
         <Sidebar
