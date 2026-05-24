@@ -3,10 +3,12 @@
 A self-hosted, end-to-end encrypted chat service for small private groups. Runs on a single VM with Docker, stores everything in Redis, and the server only ever sees ciphertext.
 
 - **End-to-end encryption** for both DMs and rooms, via the Web Crypto API (ECDH P-256 + AES-256-GCM). Private keys are non-extractable, stored in IndexedDB; the server holds public keys and wrapped room keys, never plaintext.
+- **Cross-device history recovery** with a password-wrapped private key, plus **self-serve password change** that re-wraps the recovery blob client-side so prior history stays decryptable.
 - **Backend** in Go (`net/http` + `gorilla/websocket`, no framework).
 - **Frontend** in React + TypeScript (Vite, Tailwind, Zustand), shipped as an installable PWA with a custom service worker.
-- **Storage**: Redis only — messages live as TTL-pruned ZSETs.
+- **Storage**: Redis only — messages live as TTL-pruned ZSETs, fetched in cursor-paginated pages so very long histories don't blow up first paint.
 - **Real-time** over WebSocket; REST for auth, history, and admin.
+- **Fluent Emoji picker** in the message input, with Microsoft's 3D emoji set served from a CDN (no asset bundling).
 - **Optional Web Push** to offline recipients (Chrome, Firefox, and Safari/macOS/iOS).
 
 ---
@@ -86,7 +88,8 @@ When the PWA is reinstalled on the same device — or installed fresh on a new d
 
 Caveats:
 
-- **Login password = recovery passphrase.** Anyone with the password can recover the history; conversely, *losing* the password loses the history. Admin password resets invalidate the wrapped blob.
+- **Login password = recovery passphrase.** Anyone with the password can recover the history; conversely, *losing* the password loses the history.
+- **Self-serve password change preserves recovery; admin reset does not.** A user changing their own password (key icon in the sidebar) re-wraps the recovery blob locally with the new password — old history stays recoverable on other devices. An admin password reset (Admin → Users) only changes the hash; it can't re-wrap the blob because the admin doesn't know the user's plaintext password, so existing history won't be recoverable from a fresh install until the user logs in once and regenerates a recovery blob.
 - **The feature is opportunistic and forward-looking.** Users whose IndexedDB held a non-extractable key from before this feature shipped are not migrated — their existing key can't be exported. They get recovery on the next fresh-storage login (and any history encrypted before that login is permanently lost).
 - **Strength floor is the password.** A weak password makes an offline brute-force against the wrapped blob feasible for anyone who can read Redis. PBKDF2 600k iters raises the cost but doesn't eliminate it.
 
