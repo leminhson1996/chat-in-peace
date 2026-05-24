@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { Hash, MessageSquare, Send, Lock, UserPlus, Settings, ArrowLeft } from 'lucide-react'
+import { Hash, MessageSquare, Send, Lock, UserPlus, Settings, ArrowLeft, Smile } from 'lucide-react'
 import { format } from 'date-fns'
+import EmojiPicker, { EmojiStyle, Theme, type EmojiClickData } from 'emoji-picker-react'
 import { useChatStore, convKey, type ConversationKey } from '../../store/chatStore'
 import { useAuthStore } from '../../store/authStore'
 import { api } from '../../api/client'
@@ -8,6 +9,11 @@ import type { CryptoReady } from '../../hooks/useCrypto'
 import AddMemberModal from './AddMemberModal'
 import RoomSettingsModal from './RoomSettingsModal'
 import UserAvatar from '../UserAvatar'
+
+// Microsoft Fluent Emoji (3D colour) served from lobehub's mirror on jsdelivr.
+// emoji-picker-react's `unified` is lowercase, dash-joined codepoints (e.g. "1f600", "1f1fa-1f1f8").
+const fluentEmojiUrl = (unified: string) =>
+  `https://cdn.jsdelivr.net/npm/@lobehub/fluent-emoji-3d/assets/${unified}.webp`
 
 interface Props {
   conv: ConversationKey
@@ -27,8 +33,10 @@ export default function ChatArea({ conv, onSendRoom, onSendDM, onJoinRoom, onBac
   const [sending, setSending] = useState(false)
   const [showAddMember, setShowAddMember] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showEmoji, setShowEmoji] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const emojiWrapRef = useRef<HTMLDivElement>(null)
 
   const currentRoom = conv.type === 'room' ? rooms.find(r => r.id === conv.id) : null
   const isOwner = currentRoom?.created_by === myUsername
@@ -101,6 +109,44 @@ export default function ChatArea({ conv, onSendRoom, onSendDM, onJoinRoom, onBac
       send()
     }
   }
+
+  function insertEmoji(e: EmojiClickData) {
+    const ta = textareaRef.current
+    const emoji = e.emoji
+    if (!ta) {
+      setInput(prev => prev + emoji)
+      return
+    }
+    const start = ta.selectionStart ?? input.length
+    const end = ta.selectionEnd ?? input.length
+    const next = input.slice(0, start) + emoji + input.slice(end)
+    setInput(next)
+    requestAnimationFrame(() => {
+      ta.focus()
+      const pos = start + emoji.length
+      ta.setSelectionRange(pos, pos)
+    })
+  }
+
+  // Close emoji picker on outside click or Escape.
+  useEffect(() => {
+    if (!showEmoji) return
+    const onDocMouse = (ev: MouseEvent) => {
+      if (!emojiWrapRef.current?.contains(ev.target as Node)) setShowEmoji(false)
+    }
+    const onKey = (ev: globalThis.KeyboardEvent) => {
+      if (ev.key === 'Escape') setShowEmoji(false)
+    }
+    document.addEventListener('mousedown', onDocMouse)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocMouse)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [showEmoji])
+
+  // Reset picker when switching conversations.
+  useEffect(() => { setShowEmoji(false) }, [key])
 
   const title = conv.type === 'room' ? conv.name : conv.username
   const placeholder = conv.type === 'room' ? `Message #${title}` : `Message @${title}`
@@ -192,30 +238,57 @@ export default function ChatArea({ conv, onSendRoom, onSendDM, onJoinRoom, onBac
 
       {/* Input */}
       <div className="px-3 sm:px-4 pb-2 sm:pb-4 pt-1 shrink-0">
-        <div className="flex items-end gap-2 bg-[#383a40] rounded-lg px-3 sm:px-4 py-2 sm:py-2.5">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            onFocus={() => {
-              // Keyboard is about to open on mobile — scroll latest message
-              // into view once the viewport has finished resizing.
-              setTimeout(() => bottomRef.current?.scrollIntoView({ block: 'end' }), 250)
-            }}
-            placeholder={placeholder}
-            rows={1}
-            className="msg-input flex-1 min-h-[24px] max-h-32 py-0.5 bg-transparent placeholder:text-discord-muted"
-            style={{ resize: 'none', overflow: 'auto' }}
-          />
-          <button
-            onClick={send}
-            disabled={!input.trim() || sending}
-            className="text-discord-muted hover:text-discord-accent disabled:opacity-30 transition-colors pb-0.5"
-            aria-label="Send"
-          >
-            <Send size={18} />
-          </button>
+        <div ref={emojiWrapRef} className="relative">
+          {showEmoji && (
+            <div className="absolute bottom-full right-0 mb-2 z-50 shadow-2xl rounded-lg overflow-hidden">
+              <EmojiPicker
+                onEmojiClick={insertEmoji}
+                theme={Theme.DARK}
+                emojiStyle={EmojiStyle.APPLE}
+                getEmojiUrl={fluentEmojiUrl}
+                width={320}
+                height={400}
+                lazyLoadEmojis
+                searchPlaceHolder="Search emoji"
+                previewConfig={{ showPreview: false }}
+                skinTonesDisabled
+              />
+            </div>
+          )}
+          <div className="flex items-end gap-2 bg-[#383a40] rounded-lg px-3 sm:px-4 py-2 sm:py-2.5">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              onFocus={() => {
+                // Keyboard is about to open on mobile — scroll latest message
+                // into view once the viewport has finished resizing.
+                setTimeout(() => bottomRef.current?.scrollIntoView({ block: 'end' }), 250)
+              }}
+              placeholder={placeholder}
+              rows={1}
+              className="msg-input flex-1 min-h-[24px] max-h-32 py-0.5 bg-transparent placeholder:text-discord-muted"
+              style={{ resize: 'none', overflow: 'auto' }}
+            />
+            <button
+              onClick={() => setShowEmoji(v => !v)}
+              className={`transition-colors pb-0.5 ${showEmoji ? 'text-discord-accent' : 'text-discord-muted hover:text-white'}`}
+              aria-label="Emoji"
+              aria-expanded={showEmoji}
+              type="button"
+            >
+              <Smile size={18} />
+            </button>
+            <button
+              onClick={send}
+              disabled={!input.trim() || sending}
+              className="text-discord-muted hover:text-discord-accent disabled:opacity-30 transition-colors pb-0.5"
+              aria-label="Send"
+            >
+              <Send size={18} />
+            </button>
+          </div>
         </div>
         <p className="hidden sm:block text-discord-muted text-[11px] mt-1.5 px-1">
           Enter to send · Shift+Enter for new line
