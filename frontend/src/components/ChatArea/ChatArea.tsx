@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { Hash, MessageSquare, Send, Lock, UserPlus, Settings, ArrowLeft, Smile } from 'lucide-react'
+import { useEffect, useRef, useState, type KeyboardEvent, type UIEvent } from 'react'
+import { Hash, MessageSquare, Send, Lock, UserPlus, Settings, ArrowLeft, Smile, Loader2 } from 'lucide-react'
 import { format } from 'date-fns'
 import EmojiPicker, { EmojiStyle, Theme, type EmojiClickData } from 'emoji-picker-react'
 import { useChatStore, convKey, type ConversationKey } from '../../store/chatStore'
@@ -9,6 +9,8 @@ import type { CryptoReady } from '../../hooks/useCrypto'
 import AddMemberModal from './AddMemberModal'
 import RoomSettingsModal from './RoomSettingsModal'
 import UserAvatar from '../UserAvatar'
+
+const PAGE_SIZE = 50
 
 // Microsoft Fluent Emoji (3D colour) served from lobehub's mirror on jsdelivr.
 // emoji-picker-react's `unified` is lowercase, dash-joined codepoints (e.g. "1f600", "1f1fa-1f1f8").
@@ -25,34 +27,42 @@ interface Props {
 }
 
 export default function ChatArea({ conv, onSendRoom, onSendDM, onJoinRoom, onBack, crypto }: Props) {
-  const { messages, setMessages, rooms } = useChatStore()
+  const messages = useChatStore(s => s.messages)
+  const setMessages = useChatStore(s => s.setMessages)
+  const prependMessages = useChatStore(s => s.prependMessages)
+  const setHasMore = useChatStore(s => s.setHasMore)
+  const rooms = useChatStore(s => s.rooms)
   const myUsername = useAuthStore(s => s.username)
   const key = convKey(conv)
   const msgs = messages[key] ?? []
+  const hasMore = useChatStore(s => s.hasMore[key] ?? false)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [showAddMember, setShowAddMember] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showEmoji, setShowEmoji] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const emojiWrapRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  // Scroll-to-bottom only when the tail of the list actually grows. Stops
+  // pagination prepends from yanking the view down.
+  const lastMsgIdRef = useRef<string | null>(null)
 
   const currentRoom = conv.type === 'room' ? rooms.find(r => r.id === conv.id) : null
   const isOwner = currentRoom?.created_by === myUsername
 
-  // Load history + join room on conversation switch
+  // Load latest page on conversation switch
   useEffect(() => {
     if (!crypto.ready) return
+    let cancelled = false
     async function load() {
       try {
-        let history
-        if (conv.type === 'room') {
-          history = await api.getRoomHistory(conv.id)
-          onJoinRoom(conv.id)
-        } else {
-          history = await api.getDMHistory(conv.username)
-        }
+        const history = conv.type === 'room'
+          ? await api.getRoomHistory(conv.id, { limit: PAGE_SIZE })
+          : await api.getDMHistory(conv.username, { limit: PAGE_SIZE })
+        if (conv.type === 'room') onJoinRoom(conv.id)
         const decrypted = await Promise.all(
           history.map(async m => {
             const content = conv.type === 'room'
@@ -61,17 +71,67 @@ export default function ChatArea({ conv, onSendRoom, onSendDM, onJoinRoom, onBac
             return { id: m.id, sender: m.sender, ts: m.ts, content }
           })
         )
+        if (cancelled) return
         setMessages(key, decrypted)
+        setHasMore(key, history.length === PAGE_SIZE)
       } catch { /* ignore */ }
     }
     load()
+    return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, crypto.ready])
 
-  // Scroll to bottom on new messages
+  // Scroll to bottom only when the newest message id changes (i.e. a real
+  // append: initial load, WS receive, our own send). Prepends from loadMore
+  // don't change the tail, so the view stays anchored.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [msgs.length])
+    if (msgs.length === 0) return
+    const last = msgs[msgs.length - 1]
+    if (lastMsgIdRef.current !== last.id) {
+      lastMsgIdRef.current = last.id
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [msgs])
+
+  async function loadMore() {
+    if (loadingMore || !hasMore) return
+    const current = useChatStore.getState().messages[key] ?? []
+    if (current.length === 0) return
+    setLoadingMore(true)
+    const el = scrollRef.current
+    const prevScrollHeight = el?.scrollHeight ?? 0
+    const prevScrollTop = el?.scrollTop ?? 0
+    try {
+      const opts = { before: current[0].ts, limit: PAGE_SIZE }
+      const history = conv.type === 'room'
+        ? await api.getRoomHistory(conv.id, opts)
+        : await api.getDMHistory(conv.username, opts)
+      const decrypted = await Promise.all(
+        history.map(async m => {
+          const content = conv.type === 'room'
+            ? await crypto.decryptRoom(conv.id, m)
+            : await crypto.decryptDM(conv.username, m)
+          return { id: m.id, sender: m.sender, ts: m.ts, content }
+        })
+      )
+      prependMessages(key, decrypted)
+      setHasMore(key, history.length === PAGE_SIZE)
+      // Preserve the user's visual position by offsetting scrollTop by the
+      // height added at the top.
+      requestAnimationFrame(() => {
+        const node = scrollRef.current
+        if (!node) return
+        node.scrollTop = prevScrollTop + (node.scrollHeight - prevScrollHeight)
+      })
+    } catch { /* ignore */ }
+    finally {
+      setLoadingMore(false)
+    }
+  }
+
+  function onScroll(e: UIEvent<HTMLDivElement>) {
+    if (e.currentTarget.scrollTop < 80) loadMore()
+  }
 
   // Re-pin to the latest message whenever the visual viewport resizes — i.e.
   // when the mobile keyboard opens or closes. Without this the message list
@@ -200,7 +260,16 @@ export default function ChatArea({ conv, onSendRoom, onSendDM, onJoinRoom, onBac
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-0.5">
+      <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto px-4 py-4 space-y-0.5">
+        {msgs.length > 0 && (hasMore || loadingMore) && (
+          <div className="flex items-center justify-center py-2 text-discord-muted text-xs">
+            {loadingMore ? (
+              <span className="flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading older messages…</span>
+            ) : (
+              <button onClick={loadMore} className="hover:text-white transition-colors">Load older messages</button>
+            )}
+          </div>
+        )}
         {msgs.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-discord-muted">
             <Lock size={40} className="mb-3 opacity-30" />

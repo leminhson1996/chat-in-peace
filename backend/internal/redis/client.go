@@ -81,6 +81,20 @@ func (c *Client) UpdatePassword(ctx context.Context, username, hash string) erro
 	return c.rdb.HSet(ctx, "user:"+username, "password_hash", hash).Err()
 }
 
+// UpdatePasswordAndWrapped atomically updates the password hash and (if
+// wrappedBlob is non-empty) the recovery blob. The wrapped blob has to be
+// re-encrypted with the new password client-side; this pair has to land
+// together so a future fresh-install recovery uses the matching password.
+func (c *Client) UpdatePasswordAndWrapped(ctx context.Context, username, hash, wrappedBlob string) error {
+	pipe := c.rdb.TxPipeline()
+	pipe.HSet(ctx, "user:"+username, "password_hash", hash)
+	if wrappedBlob != "" {
+		pipe.Set(ctx, "user:"+username+":wrapped_privkey", wrappedBlob, 0)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
 func (c *Client) SetUserPubkey(ctx context.Context, username, pubkey string) error {
 	return c.rdb.Set(ctx, "user:"+username+":pubkey", pubkey, 0).Err()
 }
@@ -209,25 +223,36 @@ func (c *Client) SaveMessage(ctx context.Context, key string, msg Message, ttlDa
 	return err
 }
 
-func (c *Client) GetMessages(ctx context.Context, key string, ttlDays int) ([]Message, error) {
-	var min string
+// GetMessagesPage returns up to `limit` messages older than `before` (exclusive)
+// in ascending-ts order. `before == 0` means "newest". `limit <= 0` is treated
+// as no cap (used by callers that want the full history within TTL).
+func (c *Client) GetMessagesPage(ctx context.Context, key string, before int64, limit int, ttlDays int) ([]Message, error) {
+	var min, max string
 	if ttlDays > 0 {
 		cutoff := time.Now().Add(-time.Duration(ttlDays) * 24 * time.Hour).UnixMilli()
 		min = strconv.FormatInt(cutoff, 10)
 	} else {
 		min = "-inf"
 	}
-	strs, err := c.rdb.ZRangeByScore(ctx, key, &redis.ZRangeBy{
-		Min: min,
-		Max: "+inf",
-	}).Result()
+	if before > 0 {
+		max = "(" + strconv.FormatInt(before, 10)
+	} else {
+		max = "+inf"
+	}
+	zr := &redis.ZRangeBy{Min: min, Max: max}
+	if limit > 0 {
+		zr.Count = int64(limit)
+	}
+	// ZRevRangeByScore so we get the newest-within-window first when limit caps.
+	strs, err := c.rdb.ZRevRangeByScore(ctx, key, zr).Result()
 	if err != nil {
 		return nil, err
 	}
+	// Reverse to ascending ts so callers can render top-to-bottom.
 	msgs := make([]Message, 0, len(strs))
-	for _, s := range strs {
+	for i := len(strs) - 1; i >= 0; i-- {
 		var m Message
-		if err := json.Unmarshal([]byte(s), &m); err == nil {
+		if err := json.Unmarshal([]byte(strs[i]), &m); err == nil {
 			msgs = append(msgs, m)
 		}
 	}
@@ -245,16 +270,16 @@ func (c *Client) SaveDM(ctx context.Context, from, to string, msg Message, ttlDa
 	return c.SaveMessage(ctx, dmKey(from, to), msg, ttlDays)
 }
 
-func (c *Client) GetDMHistory(ctx context.Context, a, b string, ttlDays int) ([]Message, error) {
-	return c.GetMessages(ctx, dmKey(a, b), ttlDays)
+func (c *Client) GetDMHistory(ctx context.Context, a, b string, before int64, limit, ttlDays int) ([]Message, error) {
+	return c.GetMessagesPage(ctx, dmKey(a, b), before, limit, ttlDays)
 }
 
 func (c *Client) SaveRoomMessage(ctx context.Context, roomID string, msg Message, ttlDays int) error {
 	return c.SaveMessage(ctx, "room:"+roomID+":messages", msg, ttlDays)
 }
 
-func (c *Client) GetRoomHistory(ctx context.Context, roomID string, ttlDays int) ([]Message, error) {
-	return c.GetMessages(ctx, "room:"+roomID+":messages", ttlDays)
+func (c *Client) GetRoomHistory(ctx context.Context, roomID string, before int64, limit, ttlDays int) ([]Message, error) {
+	return c.GetMessagesPage(ctx, "room:"+roomID+":messages", before, limit, ttlDays)
 }
 
 // ── Config ─────────────────────────────────────────────────────────────────

@@ -85,6 +85,31 @@ export async function unwrapPrivateKey(
   return { privateKey, publicKey }
 }
 
+// Decrypt a wrapped-privkey blob with the current password and re-encrypt with
+// a new one — used by self-serve password change. We never go through a
+// CryptoKey, so this works even when the in-IDB private key is non-extractable.
+// Throws OperationError if `currentPassword` is wrong (AES-GCM auth tag fails).
+export async function rewrapPrivateKey(
+  blob: string,
+  currentPassword: string,
+  newPassword: string,
+  username: string,
+): Promise<string> {
+  const { iv, ct } = JSON.parse(blob)
+  const oldWrap = await deriveWrappingKey(currentPassword, username)
+  const ivBytes = Uint8Array.from(atob(iv), c => c.charCodeAt(0))
+  const ctBytes = Uint8Array.from(atob(ct), c => c.charCodeAt(0))
+  const pkcs8 = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, oldWrap, ctBytes)
+
+  const newWrap = await deriveWrappingKey(newPassword, username)
+  const newIv = crypto.getRandomValues(new Uint8Array(12))
+  const newCt = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: newIv }, newWrap, pkcs8)
+  return JSON.stringify({
+    iv: btoa(String.fromCharCode(...newIv)),
+    ct: btoa(String.fromCharCode(...new Uint8Array(newCt))),
+  })
+}
+
 // Take a freshly-generated EXTRACTABLE private key and re-import the same key
 // material as NON-extractable so it can be safely persisted in IndexedDB.
 export async function downgradeToNonExtractable(priv: CryptoKey): Promise<CryptoKey> {

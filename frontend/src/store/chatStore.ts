@@ -21,6 +21,8 @@ export interface Room {
 interface ChatState {
   rooms: Room[]
   messages: Record<string, DecryptedMessage[]> // key = roomId or "dm:username"
+  // True when there may be older messages to load. Undefined = not yet loaded.
+  hasMore: Record<string, boolean>
   unread: Record<string, number>
   userIcons: Record<string, string> // username → lucide icon id (whitelist in src/icons.tsx)
   userColors: Record<string, string> // username → color id (whitelist in src/colors.ts)
@@ -31,6 +33,10 @@ interface ChatState {
   // sender's own echo (no notification owed) or already-read history.
   appendMessage: (key: string, msg: DecryptedMessage, bumpUnread?: boolean) => void
   setMessages: (key: string, msgs: DecryptedMessage[]) => void
+  // Prepend older messages loaded via pagination. Caller passes them in
+  // ascending-ts order; we splice them in at the head.
+  prependMessages: (key: string, msgs: DecryptedMessage[]) => void
+  setHasMore: (key: string, hasMore: boolean) => void
   setUserIcons: (icons: Record<string, string>) => void
   setUserIcon: (username: string, icon: string) => void
   setUserColors: (colors: Record<string, string>) => void
@@ -44,6 +50,7 @@ export function convKey(conv: ConversationKey) {
 export const useChatStore = create<ChatState>((set) => ({
   rooms: [],
   messages: {},
+  hasMore: {},
   unread: {},
   userIcons: {},
   userColors: {},
@@ -66,6 +73,10 @@ export const useChatStore = create<ChatState>((set) => ({
     }),
   setMessages: (key, msgs) =>
     set((s) => ({ messages: { ...s.messages, [key]: msgs } })),
+  prependMessages: (key, msgs) =>
+    set((s) => ({ messages: { ...s.messages, [key]: [...msgs, ...(s.messages[key] ?? [])] } })),
+  setHasMore: (key, hasMore) =>
+    set((s) => ({ hasMore: { ...s.hasMore, [key]: hasMore } })),
   setUserIcons: (icons) => set({ userIcons: icons }),
   setUserIcon: (username, icon) =>
     set((s) => {

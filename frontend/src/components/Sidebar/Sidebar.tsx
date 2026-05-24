@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Hash, MessageSquare, Lock, Settings, LogOut, Plus, Bell, BellOff } from 'lucide-react'
+import { Hash, MessageSquare, Lock, Settings, LogOut, Plus, Bell, BellOff, KeyRound } from 'lucide-react'
 import { useChatStore, type ConversationKey, convKey } from '../../store/chatStore'
 import { useAuthStore } from '../../store/authStore'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
 import clsx from 'clsx'
 import UserAvatar from '../UserAvatar'
+import ChangePasswordModal from '../ChangePasswordModal'
 import { getSubscriptionState, pushSupported, subscribePush, unsubscribePush } from '../../push'
 
 interface Props {
@@ -20,6 +21,7 @@ export default function Sidebar({ dmUsers, onNewRoom }: Props) {
   const { logout } = useAuth()
   const navigate = useNavigate()
 
+  const [showChangePassword, setShowChangePassword] = useState(false)
   const [pushState, setPushState] = useState<'unsupported' | 'denied' | 'unsubscribed' | 'subscribed' | 'busy'>('unsubscribed')
   useEffect(() => {
     if (!pushSupported()) { setPushState('unsupported'); return }
@@ -169,6 +171,13 @@ export default function Sidebar({ dmUsers, onNewRoom }: Props) {
             {pushState === 'subscribed' ? <Bell size={16} /> : <BellOff size={16} />}
           </button>
         )}
+        <button
+          onClick={() => setShowChangePassword(true)}
+          className="text-discord-muted hover:text-discord-text transition-colors p-1"
+          title="Change password"
+        >
+          <KeyRound size={16} />
+        </button>
         {role === 'admin' && (
           <button
             onClick={() => navigate('/admin')}
@@ -186,6 +195,8 @@ export default function Sidebar({ dmUsers, onNewRoom }: Props) {
           <LogOut size={16} />
         </button>
       </div>
+
+      {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} />}
     </aside>
   )
 }

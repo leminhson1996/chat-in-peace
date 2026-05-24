@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"strconv"
 
 	"chatinpeace/internal/admin"
 	"chatinpeace/internal/auth"
@@ -16,6 +17,9 @@ import (
 	"chatinpeace/internal/push"
 	rdb "chatinpeace/internal/redis"
 )
+
+const historyPageMax = 200
+const historyPageDefault = 50
 
 func main() {
 	cfg := config.Load()
@@ -121,6 +125,45 @@ func main() {
 			return
 		}
 		if err := redis.SetWrappedPrivkey(r.Context(), claims.Username, body.WrappedPrivkey); err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(204)
+	}))
+
+	// Self-serve password change. The client re-encrypts its wrapped_privkey
+	// blob with the new password and sends both atomically so cross-device
+	// recovery survives. wrapped_privkey is optional — users who never set up
+	// recovery just rotate the password.
+	mux.HandleFunc("POST /api/users/me/password", requireAuth(cfg.JWTSecret, func(w http.ResponseWriter, r *http.Request, claims *auth.Claims) {
+		var body struct {
+			CurrentPassword string `json:"current_password"`
+			NewPassword     string `json:"new_password"`
+			WrappedPrivkey  string `json:"wrapped_privkey"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.CurrentPassword == "" || body.NewPassword == "" {
+			writeJSON(w, 400, map[string]string{"error": "current_password and new_password required"})
+			return
+		}
+		if len(body.NewPassword) < 8 {
+			writeJSON(w, 400, map[string]string{"error": "new password must be at least 8 characters"})
+			return
+		}
+		u, err := redis.GetUser(r.Context(), claims.Username)
+		if err != nil || u["password_hash"] == "" {
+			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if !auth.CheckPassword(u["password_hash"], body.CurrentPassword) {
+			writeJSON(w, 401, map[string]string{"error": "current password is incorrect"})
+			return
+		}
+		hash, err := auth.HashPassword(body.NewPassword)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": "hash error"})
+			return
+		}
+		if err := redis.UpdatePasswordAndWrapped(r.Context(), claims.Username, hash, body.WrappedPrivkey); err != nil {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
@@ -330,10 +373,14 @@ func main() {
 	}))
 
 	// ── History ──────────────────────────────────────────────────────────
+	// ?before=<unix-ms> and ?limit=<n> support cursor pagination. Omitting
+	// `before` returns the newest page; subsequent calls pass the oldest ts
+	// of the previous page to walk backwards.
 	mux.HandleFunc("GET /api/rooms/{id}/history", requireAuth(cfg.JWTSecret, func(w http.ResponseWriter, r *http.Request, claims *auth.Claims) {
 		id := r.PathValue("id")
+		before, limit := parsePagination(r)
 		ttl, _ := redis.GetHistoryTTL(r.Context())
-		msgs, err := redis.GetRoomHistory(r.Context(), id, ttl)
+		msgs, err := redis.GetRoomHistory(r.Context(), id, before, limit, ttl)
 		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
@@ -343,8 +390,9 @@ func main() {
 
 	mux.HandleFunc("GET /api/dm/{username}/history", requireAuth(cfg.JWTSecret, func(w http.ResponseWriter, r *http.Request, claims *auth.Claims) {
 		other := r.PathValue("username")
+		before, limit := parsePagination(r)
 		ttl, _ := redis.GetHistoryTTL(r.Context())
-		msgs, err := redis.GetDMHistory(r.Context(), claims.Username, other, ttl)
+		msgs, err := redis.GetDMHistory(r.Context(), claims.Username, other, before, limit, ttl)
 		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
@@ -425,6 +473,18 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func parsePagination(r *http.Request) (before int64, limit int) {
+	before, _ = strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = historyPageDefault
+	}
+	if limit > historyPageMax {
+		limit = historyPageMax
+	}
+	return
 }
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────

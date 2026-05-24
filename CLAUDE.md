@@ -60,7 +60,7 @@ internal/push/push.go       Web Push (VAPID) sender; no-op when env vars unset
 ```
 
 **Key invariants:**
-- Messages stored as ZSETs scored by Unix ms timestamp; `ZREMRANGEBYSCORE` prunes by TTL on every write (no background job)
+- Messages stored as ZSETs scored by Unix ms timestamp; `ZREMRANGEBYSCORE` prunes by TTL on every write (no background job). Reads are paginated via `redis.GetMessagesPage(key, before, limit, ttlDays)` — `before == 0` means "newest", otherwise it's an exclusive upper-bound score. Backed by `ZREVRANGEBYSCORE` so the client gets the most recent page first; results are reversed to ascending ts before returning.
 - DM key format: `dm:{min(a,b)}:{max(a,b)}:messages` — always lexicographically sorted to avoid dual keys
 - Config TTL of `0` means "keep forever" — skip pruning
 - WebSocket upgrade uses `?token=<jwt>` query param (browsers can't send Authorization headers on WS)
@@ -112,6 +112,7 @@ components/ChatArea/RoomSettingsModal.tsx owner-only rename + delete
 4. **Adding a member**: caller fetches their own wrapped room key, unwraps it client-side, re-wraps with the new member's public key, POSTs the wrapped blob with the member's username — server never sees the unwrapped key
 5. Decrypted messages live only in `chatStore` in memory; only ciphertext is ever persisted
 6. **Cross-device recovery** (`crypto/recovery.ts`): on the first login that generates a fresh extractable keypair, the client wraps the PKCS#8 private key with an AES-GCM key derived from the user's login password (PBKDF2-SHA-256, 600k iters, salt `cip-recovery:{username}`) and uploads the opaque blob via `POST /api/users/me/wrapped-privkey`. On a later fresh install with empty IndexedDB, `initRecoverableKeyPair` fetches the blob and unwraps with the password — the original private key is restored, so all prior DMs and room messages decrypt again. The transient password sits in `authStore.password` (in-memory only, excluded from `persist` via `partialize`). The server can read neither the password nor the private key. Existing users with a non-extractable key already in IndexedDB are **not** migrated — their key can't be exported, so they only get recovery on the next fresh-storage login.
+7. **Self-serve password change** (`components/ChangePasswordModal.tsx` + `rewrapPrivateKey` in `crypto/recovery.ts`): the client fetches its `wrapped_privkey` blob, decrypts the PKCS#8 bytes with the current password and re-encrypts them with the new password — `crypto.subtle` works on raw bytes so this also works when the in-IDB key is non-extractable. The new blob + new password hash land atomically server-side via `POST /api/users/me/password` (Redis `UpdatePasswordAndWrapped` uses a `TxPipeline`). Users without a recovery blob just rotate the hash. The endpoint verifies the current password with `auth.CheckPassword` before mutating either key — admin's `PATCH /api/admin/users/{username}/password` still exists but skips the rewrap, so admin resets continue to invalidate recovery (this is fine: admin can't know the user's password to re-wrap with).
 
 ### Pubkey gating (important)
 
@@ -123,7 +124,13 @@ Selectors must return primitives or stable references — `useStore(s => ({ a: s
 
 ### State key convention
 
-`convKey(conv)` in `chatStore.ts` produces the map key for `messages` and `unread` — `room:{id}` or `dm:{username}`.
+`convKey(conv)` in `chatStore.ts` produces the map key for `messages`, `unread`, and `hasMore` — `room:{id}` or `dm:{username}`.
+
+### History pagination
+
+`ChatArea` loads the newest `PAGE_SIZE` (50) messages on conversation switch and writes them via `setMessages(key, msgs)`. It tracks `hasMore[key]` in `chatStore` — set to `history.length === PAGE_SIZE` after each fetch (heuristic: a full page might have more behind it; a partial page definitely doesn't). When the user scrolls within 80px of the top, `loadMore()` fires: it fetches another page with `?before={msgs[0].ts}` and prepends via `prependMessages(key, msgs)`. Scroll position is preserved by recording `scrollHeight` + `scrollTop` before the fetch and offsetting `scrollTop` by the new height delta inside `requestAnimationFrame`.
+
+**Don't** trigger scroll-to-bottom on every `msgs` change — that would yank the view back down after every prepend. Instead, `lastMsgIdRef` watches the tail message id; the scroll-to-bottom effect only fires when the tail actually changes (initial load, WS receive, own send).
 
 ### Unread tracking
 
@@ -231,6 +238,7 @@ POST   /api/users/me/pubkey             upload own public key
 GET    /api/users/{username}/pubkey     fetch any user's public key
 GET    /api/users/me/wrapped-privkey    fetch own password-wrapped private key (404 if not set)
 POST   /api/users/me/wrapped-privkey    upload own password-wrapped private key
+POST   /api/users/me/password           self-serve password change — body { current_password, new_password, wrapped_privkey? }
 GET    /api/users                       list { username, has_pubkey, icon, color } — used by DM list + AddMemberModal + avatars
 
 GET    /api/rooms                       list rooms caller is a member of (with created_by + members)
@@ -239,8 +247,8 @@ PATCH  /api/rooms/{id}                  rename — owner only (created_by)
 DELETE /api/rooms/{id}                  delete — owner only
 GET    /api/rooms/{id}/key              fetch caller's wrapped room key
 POST   /api/rooms/{id}/members          add member — caller must be a member; body { username, wrapped_key }
-GET    /api/rooms/{id}/history          decrypted-on-client message history
-GET    /api/dm/{username}/history       DM history with another user
+GET    /api/rooms/{id}/history          decrypted-on-client message history; cursor pagination via ?before=<unix-ms>&limit=<n> (default 50, max 200)
+GET    /api/dm/{username}/history       DM history with another user; same ?before/?limit pagination as rooms
 GET    /ws                              WebSocket upgrade (?token=<jwt>)
 
 GET    /api/push/vapid-public           → { public_key, enabled } — public (no auth needed)

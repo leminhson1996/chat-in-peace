@@ -34,6 +34,11 @@ export const api = {
   uploadWrappedPrivkey: (wrapped_privkey: string) =>
     request<void>('POST', '/users/me/wrapped-privkey', { wrapped_privkey }),
 
+  // Self-serve password change. wrapped_privkey is omitted by users who have
+  // no recovery blob set up.
+  changePassword: (current_password: string, new_password: string, wrapped_privkey?: string) =>
+    request<void>('POST', '/users/me/password', { current_password, new_password, wrapped_privkey: wrapped_privkey ?? '' }),
+
   getRooms: () => request<Array<{ id: string; name: string; created_by: string; members: string[] }>>('GET', '/rooms'),
   createRoom: (name: string, wrapped_key: string) =>
     request<{ id: string; name: string }>('POST', '/rooms', { name, wrapped_key }),
@@ -41,13 +46,15 @@ export const api = {
     request<{ id: string; name: string }>('PATCH', `/rooms/${id}`, { name }),
   deleteRoom: (id: string) => request<void>('DELETE', `/rooms/${id}`),
   getRoomKey: (id: string) => request<{ wrapped_key: string }>('GET', `/rooms/${id}/key`),
-  getRoomHistory: (id: string) => request<Message[]>('GET', `/rooms/${id}/history`),
+  getRoomHistory: (id: string, opts?: { before?: number; limit?: number }) =>
+    request<Message[]>('GET', `/rooms/${id}/history${pageQuery(opts)}`),
   addRoomMember: (id: string, username: string, wrapped_key: string) =>
     request<void>('POST', `/rooms/${id}/members`, { username, wrapped_key }),
 
   listUsers: () => request<Array<{ username: string; has_pubkey: boolean; icon: string; color: string }>>('GET', '/users'),
 
-  getDMHistory: (username: string) => request<Message[]>('GET', `/dm/${username}/history`),
+  getDMHistory: (username: string, opts?: { before?: number; limit?: number }) =>
+    request<Message[]>('GET', `/dm/${username}/history${pageQuery(opts)}`),
 
   // Web Push
   getVapidPublic: () => request<{ public_key: string; enabled: boolean }>('GET', '/push/vapid-public'),
@@ -73,6 +80,15 @@ export const api = {
   adminGetSettings: () => request<{ history_ttl_days: number }>('GET', '/admin/settings'),
   adminUpdateSettings: (history_ttl_days: string) =>
     request<{ history_ttl_days: number }>('PUT', '/admin/settings', { history_ttl_days }),
+}
+
+function pageQuery(opts?: { before?: number; limit?: number }): string {
+  if (!opts) return ''
+  const p = new URLSearchParams()
+  if (opts.before && opts.before > 0) p.set('before', String(opts.before))
+  if (opts.limit && opts.limit > 0) p.set('limit', String(opts.limit))
+  const s = p.toString()
+  return s ? `?${s}` : ''
 }
 
 export interface Message {
